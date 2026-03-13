@@ -121,6 +121,7 @@ See [docs/tool-reference.md](./docs/tool-reference.md) for full parameter and ou
 - The device inventory is derived purely from observed source/destination IPs. It does not correlate with vendor OUIs, DHCP records, or any external data source.
 - BACnet device instance numbers and object names are extracted when present, but tshark attribute names vary by version. Some fields may be `null` on older tshark builds.
 - `docker-compose.yml` is included for convenience but assumes the repo root layout matches the build context. Adjust `build:` paths if your layout differs.
+- Both tools accept an optional `packet_limit` parameter (default: 500) that caps the number of matching packets decoded per run. This limit is in place during early testing and will be removed in a future version. For large captures, increase the limit explicitly when calling the tool.
 
 ## Test PCAPs
 
