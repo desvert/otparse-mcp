@@ -1,0 +1,12 @@
+services:
+  otparse:
+    build: ./otparse
+    container_name: mcp-otparse
+    stdin_open: true
+    tty: false
+    network_mode: "none"
+    user: "1000:1000"
+    volumes:
+      - /srv/evidence:/evidence:ro
+    restart: "no"
+
