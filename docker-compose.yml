@@ -1,6 +1,6 @@
 services:
   otparse:
-    build: ./otparse
+    build: .
     container_name: mcp-otparse
     stdin_open: true
     tty: false

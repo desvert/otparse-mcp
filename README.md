@@ -1,50 +1,53 @@
 # otparse
 
-`otparse` is a containerized MCP server for parsing OT/ICS packet captures. This first cut exposes two tools:
+A containerized MCP server that parses OT/ICS packet captures and returns structured JSON. Designed to plug into a Claude Code workflow for analyzing saved PCAP files from Modbus/TCP and BACnet/IP networks.
 
-- `parse_modbus_pcap`
-- `parse_bacnet_pcap`
+**Status:** [EXPERIMENTAL]
 
-The design follows the same container-first pattern you used for `netparse`, so the server can run with a read-only evidence mount and no network access.
+---
 
-## Why this shape
+## What It Does
 
-This is the practical MVP:
+`otparse` exposes two MCP tools:
 
-- Use `tshark` for protocol dissection instead of reinventing BACnet and Modbus parsing from raw bytes
-- Wrap that parsing in a small MCP server
-- Return structured JSON that an LLM can reason over
-- Keep the container locked down with `network_mode: none`
+- **`parse_modbus_pcap`** -- reads a saved PCAP file, extracts Modbus/TCP transactions using tshark, and returns decoded frames plus a basic device inventory derived from observed IPs.
+- **`parse_bacnet_pcap`** -- reads a saved PCAP file, extracts BACnet/IP packets using tshark, and returns decoded frames plus a basic device inventory derived from observed IPs.
 
-## Tools
+Both tools accept a path to a PCAP inside the container and an optional packet limit. Output is structured JSON that an LLM can reason over directly.
 
-### `parse_modbus_pcap`
+## Background
 
-Inputs:
-- `pcap_path`: path to a capture file inside the container, such as `/evidence/modbus/example.pcap`
-- `packet_limit`: optional ceiling for decoded packets
+This grew out of interest in OT/ICS security and the gap between "I have a PCAP from an industrial network" and "I can actually understand what devices were talking to each other and whether anything looks off." Wrapping tshark in an MCP server means Claude can do the first layer of that analysis without a separate toolchain.
 
-Returns:
-- decoded Modbus/TCP transactions
-- basic device inventory derived from source and destination IPs
+The container design follows the same pattern as `netparse`: read-only evidence mount, no outbound network access, non-root user.
 
-### `parse_bacnet_pcap`
+## Requirements
 
-Inputs:
-- `pcap_path`: path to a capture file inside the container, such as `/evidence/bacnet/example.pcap`
-- `packet_limit`: optional ceiling for decoded packets
+- Docker (for the containerized path)
+- Or: Python 3.11+, tshark installed on the host (for local dev)
 
-Returns:
-- decoded BACnet/IP packets
-- basic device inventory derived from source and destination IPs
+## Setup
 
-## Build
+### Container (recommended)
 
 ```bash
 docker build -t otparse-mcp .
 ```
 
-## Run as a containerized MCP server
+### Local dev
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+pip install -e .
+```
+
+tshark must be available in your PATH for local development.
+
+## Usage
+
+### Run as a containerized MCP server
 
 ```bash
 docker run --rm -i \
@@ -53,7 +56,7 @@ docker run --rm -i \
   otparse-mcp:latest
 ```
 
-## Claude Desktop style MCP config example
+### Claude Desktop / Claude Code config
 
 ```json
 {
@@ -61,13 +64,9 @@ docker run --rm -i \
     "otparse": {
       "command": "docker",
       "args": [
-        "run",
-        "--rm",
-        "-i",
-        "--network",
-        "none",
-        "-v",
-        "/srv/evidence:/evidence:ro",
+        "run", "--rm", "-i",
+        "--network", "none",
+        "-v", "/srv/evidence:/evidence:ro",
         "otparse-mcp:latest"
       ]
     }
@@ -75,24 +74,65 @@ docker run --rm -i \
 }
 ```
 
-## Local dev
+### Example tool call
+
+Once connected, ask Claude something like:
+
+> "Parse the Modbus capture at `/evidence/modbus/example.pcap` and summarize what devices were communicating."
+
+Claude will call `parse_modbus_pcap` and work from the returned JSON.
+
+### Run locally (dev only)
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
 python -m otparse.server
 ```
 
-You still need `tshark` installed on the host for local development.
+## Project Structure
 
-## Notes about the sample PCAP source
+```
+otparse/
+├── otparse/
+│   ├── __init__.py
+│   ├── server.py               # FastMCP server, tool definitions
+│   ├── models.py               # Pydantic models for all inputs/outputs
+│   ├── parsers/
+│   │   ├── common.py           # Shared helpers (path validation, tshark check, type coercion)
+│   │   ├── modbus.py           # Modbus/TCP parser using pyshark + tshark
+│   │   └── bacnet.py           # BACnet/IP parser using pyshark + tshark
+│   └── analyzers/
+│       └── devices.py          # Builds device inventory from parsed transactions
+├── Dockerfile
+├── docker-compose.yml
+├── pyproject.toml
+├── requirements.txt
+└── README.md
+```
 
-You mentioned using PCAPs from the ITI `ICS-Security-Tools` repository. That repo includes a `pcaps/` area intended for ICS security exploration, which makes it a reasonable source for test captures. The repository describes itself as a community asset for ICS security tools, guides, protocols, and PCAP files. citeturn0view0turn1view2
+## Tool Reference
 
-## Next good additions
+See [docs/tool-reference.md](./docs/tool-reference.md) for full parameter and output documentation.
 
-- add a combined `extract_ics_devices` tool
-- add anomaly heuristics for writes, scans, and unusual BACnet services
-- add a timeline/summarizer tool
-- add small fixture PCAPs and parser tests
+## Notes / Limitations
+
+- This tool only analyzes **saved PCAP files**. It does not do live capture.
+- tshark does the actual protocol dissection. If a PCAP uses a non-standard port or an unusual encapsulation, tshark may not identify the traffic and the tool will return an empty result with a note.
+- Modbus `direction` (request vs. response) detection depends on pyshark exposing the right attributes. Some captures may produce `"unknown"` for most frames.
+- The device inventory is derived purely from observed source/destination IPs. It does not correlate with vendor OUIs, DHCP records, or any external data source.
+- BACnet device instance numbers and object names are extracted when present, but tshark attribute names vary by version. Some fields may be `null` on older tshark builds.
+- `docker-compose.yml` is included for convenience but assumes the repo root layout matches the build context. Adjust `build:` paths if your layout differs.
+
+## Test PCAPs
+
+Sample ICS PCAPs suitable for testing can be found in the [ITI ICS-Security-Tools repository](https://github.com/ITI/ICS-Security-Tools), which maintains a collection of ICS protocol captures for security research.
+
+## Planned
+
+- `extract_ics_devices` tool combining Modbus and BACnet inventory into a single view
+- Anomaly heuristics (unusual function codes, broadcast storms, write-heavy sessions)
+- Timeline/session summarizer tool
+- Fixture PCAPs and parser unit tests
+
+## Changelog
+
+See [CHANGELOG.md](./CHANGELOG.md)
