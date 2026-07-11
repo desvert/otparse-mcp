@@ -41,10 +41,37 @@ def parse_bacnet_pcap(pcap_path: str, packet_limit: int = 500) -> BacnetParseRes
 
             bacnet = getattr(packet, "bacnet", None)
             bvlc = getattr(packet, "bvlc", None)
+            bacapp = getattr(packet, "bacapp", None)
             ip = getattr(packet, "ip", None)
             udp = getattr(packet, "udp", None)
-            if bacnet is None and bvlc is None:
+            if bacnet is None and bvlc is None and bacapp is None:
                 continue
+
+# Added from here
+            apdu_type = safe_str(_get_attr(bacapp, "type"))
+            service = safe_str(_get_attr(bacapp, "confirmed_service", "unconfirmed_service"))
+            invoke_id = safe_int(_get_attr(bacapp, "invoke_id"))
+# to here
+
+            object_type = None
+            object_instance = None
+            oid = _get_attr(bacapp, "objectidentifier")
+            if oid is not None:
+                object_type = safe_int(getattr(oid, "objectType", None))
+                object_instance = safe_int(getattr(oid, "instance_number", None))
+
+            property_identifier = None
+            pid = _get_attr(bacapp, "property_identifier")
+            if pid is not None:
+                property_identifier = safe_int(pid.get("property_identifier"))
+
+# and added this block
+            if apdu_type == "5" and (invoke_id is None or service is None):
+                notes.append(
+                    f"Frame {packet.number}: Error PDU is missing invoke_id/service due to a "
+                    "known pyshark JSON-dissection limitation (raw tshark field export still "
+                    "has these values; pyshark's field_names omits them for apdu_type=5)."
+                )
 
             packets.append(
                 BacnetPacket(
@@ -54,22 +81,16 @@ def parse_bacnet_pcap(pcap_path: str, packet_limit: int = 500) -> BacnetParseRes
                     dst_ip=safe_str(getattr(ip, "dst", None)),
                     src_port=safe_int(getattr(udp, "srcport", None)),
                     dst_port=safe_int(getattr(udp, "dstport", None)),
-                    bvlc_function=safe_str(_get_attr(bvlc, "function", "func")) or safe_str(_get_attr(bacnet, "bvlc_function")),
+                    bvlc_function=safe_str(_get_attr(bvlc, "function", "func")),
                     npdu_control=safe_str(_get_attr(bacnet, "control", "npdu_control")),
-                    apdu_type=safe_str(_get_attr(bacnet, "apdu_type", "confirmed_service_request", "unconfirmed_service_request")),
-                    service=safe_str(
-                        _get_attr(
-                            bacnet,
-                            "confirmed_service_request",
-                            "unconfirmed_service_request",
-                            "confirmed_service_ack",
-                            "service_choice",
-                        )
-                    ),
-                    invoke_id=safe_int(_get_attr(bacnet, "invoke_id")),
-                    object_type=safe_str(_get_attr(bacnet, "objectType", "object_type")),
-                    object_instance=safe_int(_get_attr(bacnet, "instance_number", "object_instance")),
-                    property_identifier=safe_str(_get_attr(bacnet, "propertyIdentifier", "property_identifier")),
+                    apdu_type=apdu_type,
+                    service=service,
+                    invoke_id=invoke_id,
+                    object_type=object_type,
+                    object_instance=object_instance,
+                    property_identifier=property_identifier,
+                    error_class=safe_int(_get_attr(bacapp, "error_class")),
+                    error_code=safe_int(_get_attr(bacapp, "error_code")),
                     raw_summary=safe_str(getattr(packet, "highest_layer", None)),
                 )
             )

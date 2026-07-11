@@ -15,12 +15,30 @@ FUNCTION_NAMES = {
     4: "Read Input Registers",
     5: "Write Single Coil",
     6: "Write Single Register",
+    8: "Diagnostics",
     15: "Write Multiple Coils",
     16: "Write Multiple Registers",
     22: "Mask Write Register",
     23: "Read/Write Multiple Registers",
     24: "Read FIFO Queue",
     43: "Encapsulated Interface Transport",
+}
+
+DIAGNOSTIC_SUBFUNCTIONS = {
+    0: "Return Query Data",
+    1: "Restart Communications Option",
+    4: "Force Listen Only Mode",
+    10: "Clear Counters and Diagnostic Register",
+}
+
+EXCEPTION_NAMES = {
+    1: "Illegal Function",
+    2: "Illegal Data Address",
+    3: "Illegal Data Value",
+    4: "Slave Device Failure",
+    5: "Acknowledge",
+    6: "Slave Device Busy",
+    11: "Gateway Target Device Failed to Respond",
 }
 
 
@@ -59,6 +77,7 @@ def parse_modbus_pcap(pcap_path: str, packet_limit: int = 500) -> ModbusParseRes
             modbus = getattr(packet, "modbus", None)
             ip = getattr(packet, "ip", None)
             tcp = getattr(packet, "tcp", None)
+            mbtcp = getattr(packet, "mbtcp", None)
             if modbus is None:
                 continue
 
@@ -68,6 +87,12 @@ def parse_modbus_pcap(pcap_path: str, packet_limit: int = 500) -> ModbusParseRes
             )
             if function_name and function_name.isdigit() and function_code in FUNCTION_NAMES:
                 function_name = FUNCTION_NAMES[function_code]
+
+            diagnostic_subfunction = safe_int(_get_attr(modbus, "diagnostic_code"))
+            diagnostic_subfunction_name = DIAGNOSTIC_SUBFUNCTIONS.get(diagnostic_subfunction) if diagnostic_subfunction is not None else None
+
+            exception_code = safe_int(_get_attr(modbus, "exception_code"))
+            exception_name = EXCEPTION_NAMES.get(exception_code) if exception_code is not None else None
 
             raw_data = _get_attr(modbus, "data", "regval_uint16", "regnum16")
             data_values: list[int] = []
@@ -83,12 +108,14 @@ def parse_modbus_pcap(pcap_path: str, packet_limit: int = 500) -> ModbusParseRes
                         data_values.append(parsed)
 
             direction = "unknown"
-            request_flag = safe_str(_get_attr(modbus, "request"))
-            response_flag = safe_str(_get_attr(modbus, "response"))
-            if request_flag is not None:
-                direction = "request"
-            elif response_flag is not None:
+            request_frame_ref = _get_attr(modbus, "request_frame")
+            if request_frame_ref is not None or exception_code is not None:
                 direction = "response"
+            elif function_code is not None:
+                direction = "request"
+            else:
+                direction = "unknown"
+
 
             transactions.append(
                 ModbusTransaction(
@@ -98,14 +125,18 @@ def parse_modbus_pcap(pcap_path: str, packet_limit: int = 500) -> ModbusParseRes
                     dst_ip=safe_str(getattr(ip, "dst", None)),
                     src_port=safe_int(getattr(tcp, "srcport", None)),
                     dst_port=safe_int(getattr(tcp, "dstport", None)),
-                    transaction_id=safe_int(_get_attr(modbus, "trans_id", "transaction_id")),
-                    unit_id=safe_int(_get_attr(modbus, "unit_id")),
+                    transaction_id=safe_int(_get_attr(mbtcp, "trans_id")) if mbtcp else None,
+                    unit_id=safe_int(_get_attr(mbtcp, "unit_id")) if mbtcp else None,
                     function_code=function_code,
                     function_name=function_name,
                     reference_number=safe_int(_get_attr(modbus, "reference_num", "reference_number")),
                     word_count=safe_int(_get_attr(modbus, "word_cnt", "word_count")),
                     bit_count=safe_int(_get_attr(modbus, "bit_cnt", "bit_count")),
                     data=data_values,
+                    diagnostic_subfunction=diagnostic_subfunction,
+                    diagnostic_subfunction_name=diagnostic_subfunction_name,
+                    exception_code=exception_code,
+                    exception_name=exception_name,
                     raw_summary=safe_str(getattr(packet, "highest_layer", None)),
                     direction=direction,
                 )

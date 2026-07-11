@@ -25,6 +25,10 @@ class ModbusTransaction(BaseModel):
     word_count: int | None = None
     bit_count: int | None = None
     data: list[int] = Field(default_factory=list)
+    diagnostic_subfunction: int | None = None
+    diagnostic_subfunction_name: str | None = None
+    exception_code: int | None = None
+    exception_name: str | None = None
     raw_summary: str | None = None
     direction: Literal["request", "response", "unknown"] = "unknown"
 
@@ -47,9 +51,11 @@ class BacnetPacket(BaseModel):
     apdu_type: str | None = None
     service: str | None = None
     invoke_id: int | None = None
-    object_type: str | None = None
+    object_type: int | None = None
     object_instance: int | None = None
-    property_identifier: str | None = None
+    property_identifier: int | None = None
+    error_class: int | None = None
+    error_code: int | None = None
     raw_summary: str | None = None
 
 
